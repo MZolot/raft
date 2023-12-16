@@ -25,8 +25,8 @@ async def main():
         # index, message = (await ainput()).split()
         # await raft.send_message(nodes[int(index)], message)
         # await raft.connector.send_message(nodes[int(index)], message)
-        await raft.connector.send_message_to_everyone("hiii :3")
-        print('Message sent!')
+        # await raft.connector.send_message_to_everyone("hiii :3")
+        # print('Default message sent!')
         await asyncio.sleep(10)
 
 

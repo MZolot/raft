@@ -1,3 +1,5 @@
+import asyncio
+
 from node_connector import *
 from my_timer import Timer
 
@@ -37,6 +39,32 @@ class VoteReply:
         return "VoteReply, term " + str(self.term) + ": " + str(self.granted)
 
 
+class AppendEntriesRequest:
+    def __init__(self, term: int, data):
+        self.term = term
+        self.data = data
+
+    def __str__(self):
+        return "AppendEntriesRequest, term " + str(self.term)
+
+
+class AppendEntriesReply:
+    def __init__(self, term: int):
+        self.term = term
+
+    def __str__(self):
+        return "AppendEntriesRequest, term " + str(self.term)
+
+
+class LogEntry:
+    def __init__(self, term: int, data):
+        self.term = term
+        self.data = data
+
+    def __str__(self):
+        return "LogEntry, term " + str(self.term) + ": " + str(self.data)
+
+
 class Raft:
     def __init__(self, self_node: Node, nodes: list[Node]):
         self.node = self_node
@@ -50,6 +78,8 @@ class Raft:
         self.votes_gained = 0
         self.voted_for = None
 
+        self.log = []
+
     async def start(self):
         await self.connector.start()
         self.become_follower()
@@ -57,7 +87,7 @@ class Raft:
     def become_follower(self):
         self.role = Role.FOLLOWER
         print("I'm a follower!")
-        self.timer.start()
+        self.timer.reset()
 
     def become_candidate(self):
         self.role = Role.CANDIDATE
@@ -68,22 +98,30 @@ class Raft:
         # request_vote = RequestVote(self.node, self.current_term)
         request_vote = VoteRequest(self.current_term)
 
-        asyncio.create_task(self.connector.send_message_to_everyone(request_vote))
+        # asyncio.create_task(self.connector.send_message_to_everyone(request_vote))
+        for node in self.connector.nodes:
+            asyncio.create_task(self.connector.send_message(node, request_vote))
 
-        self.timer.start()
+        self.timer.reset()
 
     def become_leader(self):
         self.role = Role.LEADER
         print("I'm a LEADER!")
         self.timer.stop()
 
+        for node in self.connector.nodes:
+            asyncio.create_task(self.send_heartbit(node))
+        asyncio.create_task(self.connector.send_message_to_everyone(AppendEntriesRequest(self.current_term, None)))
+
     async def react_to_message(self, node: Node, message):
         if isinstance(message, VoteRequest):
             await self.respond_to_vote_request(node, message)
-        if isinstance(message, VoteReply):
+        elif isinstance(message, VoteReply):
             await self.respond_to_vote_reply(node, message)
+        elif isinstance(message, AppendEntriesRequest):
+            await self.respond_to_append_entries_request(node, message)
         else:
-            print("Message received from " + str(node) + ": " + str(message))
+            print("Unknown message received from " + str(node) + ": " + str(message) + " -- " + str(type(message)))
 
     async def respond_to_vote_request(self, candidate_node: Node, request: VoteRequest):
         print("Vote request from " + str(candidate_node))
@@ -109,6 +147,21 @@ class Raft:
             self.become_leader()
 
     def update_term(self, new_term):
-        print("Updating term " + str(self.current_term) + " -> " + str(new_term))
-        self.current_term = new_term
-        self.become_follower()
+        if new_term > self.current_term:
+            print("Updating term " + str(self.current_term) + " -> " + str(new_term))
+            self.current_term = new_term
+            self.become_follower()
+
+    async def send_heartbit(self, node: Node):
+        print("Heart starts beating for " + str(node))
+        while self.role == Role.LEADER:
+            request = AppendEntriesRequest(self.current_term, None)
+            await self.connector.send_message(node, request)
+            # print("bip " + str(node))
+            await asyncio.sleep(2)
+
+    async def respond_to_append_entries_request(self, node: Node, request: AppendEntriesRequest):
+        # print("Append entries request from " + str(node) + ": " + str(request))
+        if not request.data:
+            self.update_term(request.term)
+        self.timer.reset()

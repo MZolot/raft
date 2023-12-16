@@ -10,14 +10,16 @@ class Timer:
     async def go(self):
         timeout = 1 + random.random() * 10
         await asyncio.sleep(timeout)
+        print("Timer ran out!")
         self.callback()
 
     def stop(self):
-        self.task.cancel()
+        if self.task:
+            self.task.cancel()
+
+    def start(self):
+        self.task = asyncio.create_task(self.go())
 
     def reset(self):
         self.stop()
         self.start()
-
-    def start(self):
-        self.task = asyncio.create_task(self.go())
