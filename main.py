@@ -1,9 +1,11 @@
 import asyncio
+import random
 import sys
 from aioconsole import ainput
 
+import my_raft
 from raft import RaftServer
-from my_raft import Raft
+from my_raft import *
 from node_connector import Node, NodeConnector
 
 
@@ -22,12 +24,17 @@ async def main():
     # await raft.done_running.wait()
 
     while True:
+        message = await ainput()
+        if raft.role == Role.FOLLOWER:
+            # print(" -> to " + str(raft.leader))
+            await raft.send_request_from_client(message)
+        elif raft.role == Role.LEADER:
+            await raft.send_append_entries_request(message)
         # index, message = (await ainput()).split()
         # await raft.send_message(nodes[int(index)], message)
-        # await raft.connector.send_message(nodes[int(index)], message)
         # await raft.connector.send_message_to_everyone("hiii :3")
         # print('Default message sent!')
-        await asyncio.sleep(10)
+        await asyncio.sleep(1)
 
 
 if __name__ == '__main__':

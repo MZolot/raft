@@ -39,13 +39,22 @@ class VoteReply:
         return "VoteReply, term " + str(self.term) + ": " + str(self.granted)
 
 
+class RequestFromClient:
+    def __init__(self, term: int, data):
+        self.term = term
+        self.data = data
+
+    def __str__(self):
+        return "RequestFromClient, term " + str(self.term) + ": " + str(self.data)
+
+
 class AppendEntriesRequest:
     def __init__(self, term: int, data):
         self.term = term
         self.data = data
 
     def __str__(self):
-        return "AppendEntriesRequest, term " + str(self.term)
+        return "AppendEntriesRequest, term " + str(self.term) + ": " + str(self.data)
 
 
 class AppendEntriesReply:
@@ -57,9 +66,10 @@ class AppendEntriesReply:
 
 
 class LogEntry:
-    def __init__(self, term: int, data):
+    def __init__(self, term: int, data, index: int):
         self.term = term
         self.data = data
+        self.index = index
 
     def __str__(self):
         return "LogEntry, term " + str(self.term) + ": " + str(self.data)
@@ -77,8 +87,12 @@ class Raft:
         self.current_term = 0
         self.votes_gained = 0
         self.voted_for = None
+        self.leader = None
 
         self.log = []
+
+        self.commit_index = 0
+        self.last_applied = 0
 
     async def start(self):
         await self.connector.start()
@@ -87,6 +101,7 @@ class Raft:
     def become_follower(self):
         self.role = Role.FOLLOWER
         print("I'm a follower!")
+        self.voted_for = None
         self.timer.reset()
 
     def become_candidate(self):
@@ -94,6 +109,7 @@ class Raft:
         self.current_term += 1
         print(f'\nStarting election... term = {self.current_term} ')
         self.votes_gained = 1
+        self.voted_for = self.node
 
         # request_vote = RequestVote(self.node, self.current_term)
         request_vote = VoteRequest(self.current_term)
@@ -108,9 +124,11 @@ class Raft:
         self.role = Role.LEADER
         print("I'm a LEADER!")
         self.timer.stop()
+        self.leader = self.node
+        self.voted_for = None
 
         for node in self.connector.nodes:
-            asyncio.create_task(self.send_heartbit(node))
+            asyncio.create_task(self.send_heartbeat(node))
         asyncio.create_task(self.connector.send_message_to_everyone(AppendEntriesRequest(self.current_term, None)))
 
     async def react_to_message(self, node: Node, message):
@@ -120,6 +138,8 @@ class Raft:
             await self.respond_to_vote_reply(node, message)
         elif isinstance(message, AppendEntriesRequest):
             await self.respond_to_append_entries_request(node, message)
+        elif isinstance(message, RequestFromClient):
+            await self.respond_to_request_from_client(node, message)
         else:
             print("Unknown message received from " + str(node) + ": " + str(message) + " -- " + str(type(message)))
 
@@ -152,7 +172,7 @@ class Raft:
             self.current_term = new_term
             self.become_follower()
 
-    async def send_heartbit(self, node: Node):
+    async def send_heartbeat(self, node: Node):
         print("Heart starts beating for " + str(node))
         while self.role == Role.LEADER:
             request = AppendEntriesRequest(self.current_term, None)
@@ -160,8 +180,35 @@ class Raft:
             # print("bip " + str(node))
             await asyncio.sleep(2)
 
+    async def send_append_entries_request(self, message):
+        if not self.role == Role.LEADER:
+            print("--- send_append_entries_request not by leader!!!")
+            return
+        await self.connector.send_message_to_everyone(AppendEntriesRequest(self.current_term, message))
+
+    # Reacting to leader's command to append entries
     async def respond_to_append_entries_request(self, node: Node, request: AppendEntriesRequest):
-        # print("Append entries request from " + str(node) + ": " + str(request))
-        if not request.data:
-            self.update_term(request.term)
+        if request.term < self.current_term:
+            return
+        self.update_term(request.term)
+
+        if self.role == Role.CANDIDATE:
+            self.become_follower()
+        self.leader = node
+
+        print("Append entries request from " + str(node) + ": " + str(request))
+
         self.timer.reset()
+
+    async def send_request_from_client(self, message):
+        if not self.role == Role.FOLLOWER:
+            print("--- send_request_from_client not by client!!!")
+            return
+        await self.connector.send_message(self.leader, RequestFromClient(self.current_term, message))
+
+    async def respond_to_request_from_client(self, node: Node, request: RequestFromClient):
+        if not self.role == Role.LEADER:
+            print("--- respond_to_request_from_client not by leader!!!")
+            return
+
+        asyncio.create_task(self.send_append_entries_request(request.data))

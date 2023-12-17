@@ -8,7 +8,8 @@ class Timer:
         self.task = None
 
     async def go(self):
-        timeout = 1 + random.random() * 10
+        timeout = 2 + random.random() * 10
+        print("Timer for: " + str(timeout))
         await asyncio.sleep(timeout)
         print("Timer ran out!")
         self.callback()
