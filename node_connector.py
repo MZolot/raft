@@ -3,6 +3,7 @@ import pickle
 import traceback
 from asyncio import StreamReader, StreamWriter, Task
 from dataclasses import dataclass
+from colors import *
 
 
 @dataclass(frozen=True, eq=True, order=True)
@@ -18,15 +19,15 @@ class Connection:
 
 
 async def on_connected(node: Node):
-    print(f'Connected to {node}')
+    colorful_print(f'Connected to {node}', "connect")
 
 
 async def on_disconnected(node: Node):
-    print(f'Disconnected from {node}')
+    colorful_print(f'Disconnected from {node}', "connect")
 
 
 async def on_message(node: Node, message):
-    print(f'Got message from {node}: {message}')
+    colorful_print(f'Got message from {node}: {message}', "connect")
 
 
 class NodeConnector:
@@ -110,7 +111,6 @@ class NodeConnector:
         self.server = await asyncio.start_server(self.on_client_connected, self.self_node.ip, self.self_node.port)
         for node in self.nodes:
             if self.should_connect_to(node):
-                print(f'Started connection keeper for {node}')
                 task = asyncio.create_task(self.node_connection_keeper(node))
                 self.connection_keeper_tasks.append(task)
 
