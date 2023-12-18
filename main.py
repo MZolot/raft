@@ -15,6 +15,7 @@ async def main():
 
     while True:
         message = await ainput()
+
         args = message.split()
         match args[0]:
             case "add" | "a":
@@ -28,6 +29,9 @@ async def main():
             case "hashmap" | "hash" | "h":
                 print(str(raft.hashmap))
                 continue
+            case "log" | "l" :
+                raft.print_log()
+                continue
             case _:
                 colorful_print("No such command!", "error")
                 continue
@@ -35,7 +39,9 @@ async def main():
         if raft.role == Role.FOLLOWER:
             await raft.send_request_from_client(message)
         elif raft.role == Role.LEADER:
-            await raft.send_append_entries_request(message)
+            new_entry = LogEntry(raft.current_term, message, len(raft.log))
+            raft.log.append(new_entry)
+            await raft.send_append_entries_request()
         await asyncio.sleep(1)
 
 
