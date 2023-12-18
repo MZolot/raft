@@ -1,6 +1,7 @@
 from node_connector import *
 from my_timer import Timer
 from colors import *
+from request_types import *
 
 from enum import Enum, auto
 
@@ -9,81 +10,6 @@ class Role(Enum):
     CANDIDATE = auto()
     FOLLOWER = auto()
     LEADER = auto()
-
-
-class VoteRequest:
-    def __init__(self,
-                 term: int,
-                 last_log_index: int,
-                 last_log_term: int
-                 ):
-        self.term = term
-        self.last_log_index = last_log_index
-        self.last_log_term = last_log_term
-
-    def __str__(self):
-        return "VoteRequest, term " + str(self.term)
-
-
-class VoteReply:
-    def __init__(self, term: int, granted: bool):
-        self.term = term
-        self.granted = granted
-
-    def __str__(self):
-        return "VoteReply, term " + str(self.term) + ": " + str(self.granted)
-
-
-class RequestFromClient:
-    def __init__(self, term: int, data):
-        self.term = term
-        self.data = data
-
-    def __str__(self):
-        return "RequestFromClient, term " + str(self.term) + ": " + str(self.data)
-
-
-class LogEntry:
-    def __init__(self, term: int, data, index: int):
-        self.term = term
-        self.data = data
-        self.index = index
-
-    def __str__(self):
-        return "LogEntry, term " + str(self.term) + ": " + str(self.data)
-
-
-class AppendEntriesRequest:
-    def __init__(self,
-                 term: int,
-                 entries: LogEntry | None,
-                 prev_log_index: int,
-                 prev_log_term: int,
-                 leader_commit_index: int
-                 ):
-        self.term = term
-        self.entries = entries
-        self.prev_log_index = prev_log_index
-        self.prev_log_term = prev_log_term
-        self.leader_commit_index = leader_commit_index
-
-    def __str__(self):
-        return ("AppendEntriesRequest, term " +
-                str(self.term) +
-                ", log state: [" +
-                str(self.prev_log_index) + ", " +
-                str(self.prev_log_term) + ", " +
-                str(self.leader_commit_index) + "]" +
-                ": " + str(self.entries))
-
-
-class AppendEntriesReply:
-    def __init__(self, term: int, success: bool):
-        self.term = term
-        self.success = success
-
-    def __str__(self):
-        return "AppendEntriesRequest, term " + str(self.term) + ": " + str(self.success)
 
 
 class Raft:
@@ -108,9 +34,13 @@ class Raft:
         self.next_index = {}
         self.match_index = {}
 
+    # =================================================================================================================
+
     async def start(self):
         await self.connector.start()
         self.become_follower()
+
+    # =================================================================================================================
 
     def become_follower(self):
         self.role = Role.FOLLOWER
@@ -121,8 +51,8 @@ class Raft:
     def become_candidate(self):
         self.role = Role.CANDIDATE
         self.current_term += 1
-        colorful_print("I'm a Candidate!", "role")
-        colorful_print(f'\nStarting election... term = {self.current_term} ', "vote")
+        colorful_print("\nI'm a Candidate!", "role")
+        colorful_print(f'Starting election... term = {self.current_term} ', "vote")
         self.votes_gained = 1
         self.voted_for = self.node
 
@@ -146,13 +76,15 @@ class Raft:
         self.voted_for = None
 
         self.next_index = {node: len(self.log) for node in self.connector.nodes}
-        self.match_index = {node: -1 for node in self.connector.nodes}
+        self.match_index = {node: 0 for node in self.connector.nodes}
 
         for node in self.connector.nodes:
             asyncio.create_task(self.send_heartbeat(node))
 
         # request = AppendEntriesRequest(self.current_term, None)
         # asyncio.create_task(self.connector.send_message_to_everyone(request))
+
+    # =================================================================================================================
 
     async def react_to_message(self, node: Node, message):
         if isinstance(message, VoteRequest):
@@ -163,10 +95,13 @@ class Raft:
             await self.respond_to_append_entries_request(node, message)
         elif isinstance(message, RequestFromClient):
             await self.respond_to_request_from_client(node, message)
-        elif isinstance(message, bool):
-            pass
+        elif isinstance(message, AppendEntriesReply):
+            await self.respond_to_append_entries_reply(node, message)
         else:
-            print("Unknown message received from " + str(node) + ": " + str(message) + " -- " + str(type(message)))
+            colorful_print(
+                "Unknown message received from " + str(node) + ": " + str(message) + " -- " + str(type(message)),
+                "error"
+            )
 
     async def respond_to_vote_request(self, candidate_node: Node, request: VoteRequest):
         colorful_print("Vote request from " + str(candidate_node), "vote")
@@ -174,7 +109,7 @@ class Raft:
         if request.term < self.current_term:
             # Reply false if term < currentTerm
             vote_reply = VoteReply(self.current_term, False)
-            print("-- wrong term")
+            colorful_print("-- wrong term", "error")
 
             colorful_print("Replying to " + str(candidate_node) + ": " + str(vote_reply.granted), "vote")
             print()
@@ -192,10 +127,10 @@ class Raft:
                 vote_reply = VoteReply(self.current_term, True)
                 self.voted_for = candidate_node
             else:
-                print("-- log problem")
+                colorful_print("-- log problem", "error")
                 vote_reply = VoteReply(self.current_term, False)
         else:
-            print("-- already voted for someone else")
+            colorful_print("-- already voted for someone else", "error")
             vote_reply = VoteReply(self.current_term, False)
 
         colorful_print("Replying to " + str(candidate_node) + ": " + str(vote_reply.granted), "vote")
@@ -220,42 +155,53 @@ class Raft:
             self.current_term = new_term
             self.become_follower()
 
+    # =================================================================================================================
+
     async def send_heartbeat(self, node: Node):
         print("Heart starts beating for " + str(node))
-        request = AppendEntriesRequest(
-            term=self.current_term,
-            entries=None,
-            prev_log_index=len(self.log) - 1,
-            prev_log_term=self.log[-1].term,
-            leader_commit_index=self.commit_index
-        )
         while self.role == Role.LEADER:
+            request = AppendEntriesRequest(
+                term=self.current_term,
+                entries=None,
+                prev_log_index=self.next_index[node] - 1,
+                prev_log_term=self.log[self.next_index[node] - 1].term,
+                leader_commit_index=self.commit_index
+            )
             await self.connector.send_message(node, request)
             # print("bip " + str(node))
             await asyncio.sleep(2)
 
     async def send_append_entries_request(self, message):
         if not self.role == Role.LEADER:
-            print("--- send_append_entries_request not by leader!!!")
+            colorful_print("--- send_append_entries_request not by leader!!!", "error")
             return
 
         new_entry = LogEntry(self.current_term, message, len(self.log))
         self.log.append(new_entry)
 
-        request = AppendEntriesRequest(
-            term=self.current_term,
-            entries=new_entry,
-            prev_log_index=len(self.log) - 2,
-            prev_log_term=self.log[-2].term,
-            leader_commit_index=self.commit_index
-        )
-        await self.connector.send_message_to_everyone(request)
+        for node in self.connector.nodes:
+            #     request = AppendEntriesRequest(
+            #         term=self.current_term,
+            #         entries=new_entry,
+            #         prev_log_index=len(self.log) - 2,
+            #         prev_log_term=self.log[-2].term,
+            #         leader_commit_index=self.commit_index
+            #     )
+            request = AppendEntriesRequest(
+                term=self.current_term,
+                entries=new_entry,
+                prev_log_index=self.next_index[node] - 1,
+                prev_log_term=self.log[self.next_index[node] - 1].term,
+                leader_commit_index=self.commit_index
+            )
+            asyncio.create_task(self.connector.send_message(node, request))
+        # await self.connector.send_message_to_everyone(request)
 
     # Reacting to leader's command to append entries
     async def respond_to_append_entries_request(self, node: Node, request: AppendEntriesRequest):
         # Reply false if term < currentTerm
         if request.term < self.current_term:
-            await self.connector.send_message(node, False)
+            await self.connector.send_message(node, AppendEntriesReply(self.current_term, False))
             return
         self.update_term(request.term)
         self.timer.reset()
@@ -267,44 +213,91 @@ class Raft:
         if request.entries is not None:
             colorful_print("Append entries request from " + str(node) + ": " + str(request), "append")
 
-        # TODO: If commitIndex > lastApplied: increment lastApplied, apply
-        #  log[lastApplied] to state machine
-
-        # Reply to heartbeat
-        if not request.entries:
-            await self.connector.send_message(node, True)
-            return
+        # TODO: If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
 
         # Reply false if log does not contain an entry at prevLogIndex whose term matches prevLogTerm
-        if request.prev_log_term != self.log[request.prev_log_index].term:
-            await self.connector.send_message(node, False)
+
+        if request.prev_log_index != len(self.log) - 1:
+            colorful_print("leader prev: " + str(request.prev_log_index) + ", mine: " + str(len(self.log) - 1), "error")
+            await self.connector.send_message(node, AppendEntriesReply(self.current_term, False))
             return
+
+        if request.prev_log_term != self.log[request.prev_log_index].term:
+            await self.connector.send_message(node, AppendEntriesReply(self.current_term, False))
+            return
+
+        # Reply to heartbeat
+        # if not request.entries:
+        #     await self.connector.send_message(node, AppendEntriesReply(self.current_term, True))
+        #     return
 
         # TODO: If an existing entry conflicts with a new one (same index but different terms),
         #  delete the existing entry and all that follow it
 
         # Append any new entries not already in the log
-        self.log.append(request.entries)
+        if request.entries:
+            self.log.append(request.entries)
 
         # If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         if request.leader_commit_index > self.commit_index:
             self.commit_index = min(request.leader_commit_index, len(self.log) - 1)
 
+        colorful_print("Appended successfully", "append")
+        await self.connector.send_message(node, AppendEntriesReply(self.current_term, True))
+
+    # =================================================================================================================
+
+    # Reacting to client's reply to leader's command to append entries
+    async def respond_to_append_entries_reply(self, node: Node, reply: AppendEntriesReply):
+        # if reply.success and (self.next_index[node] != len(self.log)):
+        #     colorful_print(f"Adding missing entries: {str(self.next_index[node])}, {str(len(self.log))}", "warning")
+        #     request = AppendEntriesRequest(
+        #         term=self.current_term,
+        #         entries=self.log[self.next_index[node]],
+        #         prev_log_index=self.next_index[node] - 1,
+        #         prev_log_term=self.log[self.next_index[node] - 1].term,
+        #         leader_commit_index=self.commit_index
+        #     )
+        #     asyncio.create_task(self.connector.send_message(node, request))
+        if reply.success:
+            colorful_print("append request successful", "append")
+            self.next_index[node] = min(self.next_index[node] + 1, len(self.log))
+            self.match_index[node] = min(self.match_index[node] + 1, len(self.log) - 1)
+            colorful_print(f"next: {str(self.next_index[node])}, match: {str(self.match_index[node])}", "append")
+            return
+        else:
+            colorful_print("appended unsuccessfully", "error")
+            if reply.term > self.current_term:
+                colorful_print("reply term", "error")
+                self.update_term(reply.term)
+                return
+
+            self.match_index[node] = 0
+            self.next_index[node] -= 1
+
+            request = AppendEntriesRequest(
+                term=self.current_term,
+                entries=None,
+                prev_log_index=self.next_index[node] - 1,
+                prev_log_term=self.log[self.next_index[node] - 1].term,
+                leader_commit_index=self.commit_index
+            )
+            asyncio.create_task(self.connector.send_message(node, request))
+
+    # =================================================================================================================
+
     async def send_request_from_client(self, message):
         if not self.role == Role.FOLLOWER:
-            print("--- send_request_from_client not by client!!!")
+            colorful_print("--- send_request_from_client not by client!!!", "error")
             return
         await self.connector.send_message(self.leader, RequestFromClient(self.current_term, message))
 
     # Reacting to client's command with new entry
     async def respond_to_request_from_client(self, node: Node, request: RequestFromClient):
         if not self.role == Role.LEADER:
-            print("--- respond_to_request_from_client not by leader!!!")
+            colorful_print("--- respond_to_request_from_client not by leader!!!", "error")
             return
 
         # append entry to local log
         colorful_print("Received from " + str(node) + " : " + str(request.data), "append")
         await self.send_append_entries_request(request.data)
-
-        # applying entry to state machine
-        # asyncio.create_task(self.send_append_entries_request(new_entry))

@@ -13,7 +13,9 @@ class Colors:
         "vote": BLUE,
         "append": GREEN,
         "role": CYAN,
-        "connect": PINK
+        "connect": PINK,
+        "error": RED,
+        "warning": YELLOW
     }
 
 
