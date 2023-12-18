@@ -109,7 +109,7 @@ class Raft:
         if request.term < self.current_term:
             # Reply false if term < currentTerm
             vote_reply = VoteReply(self.current_term, False)
-            colorful_print("-- wrong term", "error")
+            colorful_print("-- wrong term", "warning")
 
             colorful_print("Replying to " + str(candidate_node) + ": " + str(vote_reply.granted), "vote")
             print()
@@ -127,10 +127,10 @@ class Raft:
                 vote_reply = VoteReply(self.current_term, True)
                 self.voted_for = candidate_node
             else:
-                colorful_print("-- log problem", "error")
+                colorful_print("-- log problem", "warning")
                 vote_reply = VoteReply(self.current_term, False)
         else:
-            colorful_print("-- already voted for someone else", "error")
+            colorful_print("-- already voted for someone else", "warning")
             vote_reply = VoteReply(self.current_term, False)
 
         colorful_print("Replying to " + str(candidate_node) + ": " + str(vote_reply.granted), "vote")
@@ -165,7 +165,7 @@ class Raft:
                 entries=None,
                 prev_log_index=self.next_index[node] - 1,
                 prev_log_term=self.log[self.next_index[node] - 1].term,
-                leader_commit_index=self.commit_index
+                leader_commit_index=min(self.commit_index, self.next_index[node])
             )
             await self.connector.send_message(node, request)
             # print("bip " + str(node))
@@ -177,29 +177,21 @@ class Raft:
             return
 
         for node in self.connector.nodes:
-            #     request = AppendEntriesRequest(
-            #         term=self.current_term,
-            #         entries=new_entry,
-            #         prev_log_index=len(self.log) - 2,
-            #         prev_log_term=self.log[-2].term,
-            #         leader_commit_index=self.commit_index
-            #     )
             if len(self.log) - 1 >= self.next_index[node]:
                 request = AppendEntriesRequest(
                     term=self.current_term,
                     entries=self.log[self.next_index[node]],
                     prev_log_index=self.next_index[node] - 1,
                     prev_log_term=self.log[self.next_index[node] - 1].term,
-                    leader_commit_index=self.commit_index
+                    leader_commit_index=min(self.commit_index, self.next_index[node])
                 )
                 asyncio.create_task(self.connector.send_message(node, request))
-        # await self.connector.send_message_to_everyone(request)
 
     # Reacting to leader's command to append entries
     async def respond_to_append_entries_request(self, node: Node, request: AppendEntriesRequest):
         # Reply false if term < currentTerm
         if request.term < self.current_term:
-            colorful_print("Refusing append entries request: have higher term than leader", "error")
+            colorful_print("Refusing append entries request: have higher term than leader", "warning")
             await self.connector.send_message(node,
                                               AppendEntriesReply(self.current_term, False, request.entries is None))
             return
@@ -213,30 +205,24 @@ class Raft:
         if request.entries is not None:
             colorful_print("Append entries request from " + str(node) + ": " + str(request), "append")
 
-        # TODO: If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
-
         # Reply false if log does not contain an entry at prevLogIndex whose term matches prevLogTerm
 
         if request.prev_log_index != len(self.log) - 1:
-            colorful_print("Refusing append entries request: log not up-to-date", "error")
-            colorful_print(f" Must have {request.prev_log_index}, have {len(self.log) - 1}", "error")
+            colorful_print("Refusing append entries request: log not up-to-date", "warning")
+            colorful_print(f" Must have {request.prev_log_index}, have {len(self.log) - 1}", "warning")
             await self.connector.send_message(node, AppendEntriesReply(self.current_term, False,
                                                                        request.entries is None))
             return
 
         if request.prev_log_term != self.log[request.prev_log_index].term:
-            colorful_print("Refusing append entries request: log conflict", "error")
+            colorful_print("Refusing append entries request: log conflict", "warning")
             await self.connector.send_message(node,
                                               AppendEntriesReply(self.current_term, False, request.entries is None))
             return
 
-        # Reply to heartbeat
-        # if not request.entries:
-        #     await self.connector.send_message(node, AppendEntriesReply(self.current_term, True))
-        #     return
-
-        # TODO: If an existing entry conflicts with a new one (same index but different terms),
-        #  delete the existing entry and all that follow it
+        # If an existing entry conflicts with a new one (same index but different terms),
+        # delete the existing entry and all that follow it
+        self.log = self.log[:request.prev_log_index + 1]
 
         # Append any new entries not already in the log
         if request.entries:
@@ -245,6 +231,8 @@ class Raft:
         # If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         if request.leader_commit_index > self.commit_index:
             self.commit_index = min(request.leader_commit_index, len(self.log) - 1)
+
+        # TODO: If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
 
         if request.entries is not None:
             colorful_print(f"Append entries request {str(len(self.log) - 1)} successful", "append")
@@ -259,12 +247,24 @@ class Raft:
             self.match_index[node] = min(self.match_index[node] + 1, len(self.log) - 1)
             if not reply.request_empty:
                 colorful_print(f"Append request to {str(node)} successful", "append")
-                # colorful_print(f"next: {str(self.next_index[node])}, match: {str(self.match_index[node])}", "append")
+
+                votes_required = (len(self.connector.nodes) + 1) / 2
+                votes_gained = 1
+                for index in self.next_index.values():
+                    # print(index)
+                    if (index == len(self.log)) or (index <= self.commit_index):
+                        votes_gained += 1
+
+                colorful_print(f"{str(votes_gained)} out of {str(votes_required)} applied", "vote")
+                if votes_gained > votes_required:
+                    colorful_print(f"Committing", "append")
+                    # TODO: apply commit, including
+                    self.commit_index = len(self.log) - 1
             return
         else:
-            colorful_print(f"Append request to {str(node)} unsuccessful", "error")
+            colorful_print(f"Append request to {str(node)} unsuccessful", "warning")
             if reply.term > self.current_term:
-                colorful_print("reply term", "error")
+                colorful_print("reply term", "warning")
                 self.update_term(reply.term)
                 return
 
@@ -300,4 +300,4 @@ class Raft:
     def print_log(self):
         print("LOG:")
         for i in range(1, len(self.log)):
-            print(f"-- {i} {str(self.log[i])}")
+            print(f"-- {i} {str(self.log[i])} (committed: {i <= self.commit_index})")
