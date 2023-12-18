@@ -34,6 +34,8 @@ class Raft:
         self.next_index = {}
         self.match_index = {}
 
+        self.hashmap = {}
+
     # =================================================================================================================
 
     async def start(self):
@@ -237,12 +239,13 @@ class Raft:
         # Append any new entries not already in the log
         if request.entries:
             self.log.append(request.entries)
+            self.parse_command(request.entries.data)
 
         # If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         if request.leader_commit_index > self.commit_index:
             self.commit_index = min(request.leader_commit_index, len(self.log) - 1)
 
-        colorful_print("Appended successfully", "append")
+        # colorful_print("Appended successfully", "append")
         await self.connector.send_message(node, AppendEntriesReply(self.current_term, True))
 
     # =================================================================================================================
@@ -260,10 +263,10 @@ class Raft:
         #     )
         #     asyncio.create_task(self.connector.send_message(node, request))
         if reply.success:
-            colorful_print("append request successful", "append")
+            # colorful_print("append request successful", "append")
             self.next_index[node] = min(self.next_index[node] + 1, len(self.log))
             self.match_index[node] = min(self.match_index[node] + 1, len(self.log) - 1)
-            colorful_print(f"next: {str(self.next_index[node])}, match: {str(self.match_index[node])}", "append")
+            # colorful_print(f"next: {str(self.next_index[node])}, match: {str(self.match_index[node])}", "append")
             return
         else:
             colorful_print("appended unsuccessfully", "error")
@@ -300,4 +303,27 @@ class Raft:
 
         # append entry to local log
         colorful_print("Received from " + str(node) + " : " + str(request.data), "append")
+        self.parse_command(request.data)
+
         await self.send_append_entries_request(request.data)
+
+    # =================================================================================================================
+
+    def parse_command(self, message: str):
+        args = message.split()
+        match args[0]:
+            case "add" | "a":
+                if len(args) < 3:
+                    colorful_print("Not enough arguments for add!\n add <key> <value>", "error")
+                else:
+                    self.hashmap[args[1]] = args[2]
+            case "delete" | "del" | "d":
+                if len(args) < 2:
+                    colorful_print("Not enough arguments for delete!\n delete <key>", "error")
+                else:
+                    if self.hashmap.get(args[1]) is None:
+                        colorful_print("No such pair in hashmap!", "error")
+                    else:
+                        self.hashmap.pop(args[1])
+            case _:
+                pass

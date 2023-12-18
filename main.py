@@ -15,6 +15,23 @@ async def main():
 
     while True:
         message = await ainput()
+        args = message.split()
+        match args[0]:
+            case "add" | "a":
+                if len(args) < 3:
+                    colorful_print("Not enough arguments for add!\n add <key> <value>", "error")
+                    continue
+            case "delete" | "del" | "d":
+                if len(args) < 2:
+                    colorful_print("Not enough arguments for delete!\n delete <key>", "error")
+                    continue
+            case "hashmap" | "hash" | "h":
+                print(str(raft.hashmap))
+                continue
+            case _:
+                colorful_print("No such command!", "error")
+                continue
+
         if raft.role == Role.FOLLOWER:
             await raft.send_request_from_client(message)
         elif raft.role == Role.LEADER:
