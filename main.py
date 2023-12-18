@@ -15,10 +15,14 @@ async def main():
 
     while True:
         message = await ainput()
-        if raft.role == Role.FOLLOWER:
+        if message == "log":
+            raft.print_log()
+        elif raft.role == Role.FOLLOWER:
             await raft.send_request_from_client(message)
         elif raft.role == Role.LEADER:
-            await raft.send_append_entries_request(message)
+            new_entry = LogEntry(raft.current_term, message, len(raft.log))
+            raft.log.append(new_entry)
+            await raft.send_append_entries_request()
         await asyncio.sleep(1)
 
 
