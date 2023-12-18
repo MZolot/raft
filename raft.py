@@ -1,5 +1,5 @@
 from node_connector import *
-from my_timer import Timer
+from timer import Timer
 from colors import *
 from request_types import *
 
@@ -231,11 +231,13 @@ class Raft:
             self.log.append(request.entries)
             # self.parse_command(request.entries.data)
 
+        # If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
+        if self.commit_index > self.last_applied:
+            self.commit(self.log[self.last_applied + 1].data)
+
         # If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         if request.leader_commit_index > self.commit_index:
             self.commit_index = min(request.leader_commit_index, len(self.log) - 1)
-
-        # TODO: If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
 
         if request.entries is not None:
             colorful_print(f"Append entries request {str(len(self.log) - 1)} successful", "append")
@@ -251,18 +253,27 @@ class Raft:
             if not reply.request_empty:
                 colorful_print(f"Append request to {str(node)} successful", "append")
 
+            index_of_last_append_to_node_log = self.next_index[node] - 1
+
+            if self.commit_index < index_of_last_append_to_node_log:
+
                 votes_required = (len(self.connector.nodes) + 1) / 2
                 votes_gained = 1
+
                 for index in self.next_index.values():
                     # print(index)
-                    if (index == len(self.log)) or (index <= self.commit_index):
+                    # if (index == len(self.log)) or (index <= self.commit_index):
+                    #     votes_gained += 1
+                    if index > index_of_last_append_to_node_log:
                         votes_gained += 1
 
                 colorful_print(f"{str(votes_gained)} out of {str(votes_required)} applied", "vote")
                 if votes_gained > votes_required:
                     colorful_print(f"Committing", "append")
-                    # TODO: apply commit, including
-                    self.commit_index = len(self.log) - 1
+                    self.commit_index += 1
+
+                if self.commit_index > self.last_applied:
+                    self.commit(self.log[self.commit_index].data)
             return
         else:
             colorful_print(f"Append request to {str(node)} unsuccessful", "warning")
@@ -300,7 +311,7 @@ class Raft:
 
     # =================================================================================================================
 
-    def parse_command(self, message: str):
+    def commit(self, message: str):
         args = message.split()
         match args[0]:
             case "add" | "a":
@@ -313,11 +324,13 @@ class Raft:
                     colorful_print("Not enough arguments for delete!\n delete <key>", "error")
                 else:
                     if self.hashmap.get(args[1]) is None:
-                        colorful_print("No such pair in hashmap!", "error")
+                        colorful_print("No such key in hashmap!", "error")
                     else:
                         self.hashmap.pop(args[1])
             case _:
                 pass
+
+        self.last_applied += 1
 
     # =================================================================================================================
 

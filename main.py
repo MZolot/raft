@@ -1,6 +1,6 @@
 import sys
 from aioconsole import ainput
-from my_raft import *
+from raft import *
 from node_connector import Node
 
 
