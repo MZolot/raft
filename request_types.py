@@ -65,9 +65,10 @@ class AppendEntriesRequest:
 
 
 class AppendEntriesReply:
-    def __init__(self, term: int, success: bool):
+    def __init__(self, term: int, success: bool, empty: bool):
         self.term = term
         self.success = success
+        self.request_empty = empty
 
     def __str__(self):
-        return "AppendEntriesRequest, term " + str(self.term) + ": " + str(self.success)
+        return "AppendEntriesReply, term " + str(self.term) + ": " + str(self.success)

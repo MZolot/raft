@@ -59,9 +59,9 @@ class NodeConnector:
                 message = await self.receive_from_connection(conn)
                 await self.on_message_received_callback(node, message)
             except Exception as e:
-                print("============================")
-                traceback.print_exception(e)
-                print("============================\n")
+                # print("============================")
+                # traceback.print_exception(e)
+                # print("============================\n")
                 await self.handle_disconnect(node)
                 break
 

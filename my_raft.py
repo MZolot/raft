@@ -171,13 +171,10 @@ class Raft:
             # print("bip " + str(node))
             await asyncio.sleep(2)
 
-    async def send_append_entries_request(self, message):
+    async def send_append_entries_request(self):
         if not self.role == Role.LEADER:
             colorful_print("--- send_append_entries_request not by leader!!!", "error")
             return
-
-        new_entry = LogEntry(self.current_term, message, len(self.log))
-        self.log.append(new_entry)
 
         for node in self.connector.nodes:
             #     request = AppendEntriesRequest(
@@ -187,21 +184,24 @@ class Raft:
             #         prev_log_term=self.log[-2].term,
             #         leader_commit_index=self.commit_index
             #     )
-            request = AppendEntriesRequest(
-                term=self.current_term,
-                entries=new_entry,
-                prev_log_index=self.next_index[node] - 1,
-                prev_log_term=self.log[self.next_index[node] - 1].term,
-                leader_commit_index=self.commit_index
-            )
-            asyncio.create_task(self.connector.send_message(node, request))
+            if len(self.log) - 1 >= self.next_index[node]:
+                request = AppendEntriesRequest(
+                    term=self.current_term,
+                    entries=self.log[self.next_index[node]],
+                    prev_log_index=self.next_index[node] - 1,
+                    prev_log_term=self.log[self.next_index[node] - 1].term,
+                    leader_commit_index=self.commit_index
+                )
+                asyncio.create_task(self.connector.send_message(node, request))
         # await self.connector.send_message_to_everyone(request)
 
     # Reacting to leader's command to append entries
     async def respond_to_append_entries_request(self, node: Node, request: AppendEntriesRequest):
         # Reply false if term < currentTerm
         if request.term < self.current_term:
-            await self.connector.send_message(node, AppendEntriesReply(self.current_term, False))
+            colorful_print("Refusing append entries request: have higher term than leader", "error")
+            await self.connector.send_message(node,
+                                              AppendEntriesReply(self.current_term, False, request.entries is None))
             return
         self.update_term(request.term)
         self.timer.reset()
@@ -218,12 +218,16 @@ class Raft:
         # Reply false if log does not contain an entry at prevLogIndex whose term matches prevLogTerm
 
         if request.prev_log_index != len(self.log) - 1:
-            colorful_print("leader prev: " + str(request.prev_log_index) + ", mine: " + str(len(self.log) - 1), "error")
-            await self.connector.send_message(node, AppendEntriesReply(self.current_term, False))
+            colorful_print("Refusing append entries request: log not up-to-date", "error")
+            colorful_print(f" Must have {request.prev_log_index}, have {len(self.log) - 1}", "error")
+            await self.connector.send_message(node, AppendEntriesReply(self.current_term, False,
+                                                                       request.entries is None))
             return
 
         if request.prev_log_term != self.log[request.prev_log_index].term:
-            await self.connector.send_message(node, AppendEntriesReply(self.current_term, False))
+            colorful_print("Refusing append entries request: log conflict", "error")
+            await self.connector.send_message(node,
+                                              AppendEntriesReply(self.current_term, False, request.entries is None))
             return
 
         # Reply to heartbeat
@@ -242,31 +246,23 @@ class Raft:
         if request.leader_commit_index > self.commit_index:
             self.commit_index = min(request.leader_commit_index, len(self.log) - 1)
 
-        colorful_print("Appended successfully", "append")
-        await self.connector.send_message(node, AppendEntriesReply(self.current_term, True))
+        if request.entries is not None:
+            colorful_print(f"Append entries request {str(len(self.log) - 1)} successful", "append")
+        await self.connector.send_message(node, AppendEntriesReply(self.current_term, True, request.entries is None))
 
     # =================================================================================================================
 
     # Reacting to client's reply to leader's command to append entries
     async def respond_to_append_entries_reply(self, node: Node, reply: AppendEntriesReply):
-        # if reply.success and (self.next_index[node] != len(self.log)):
-        #     colorful_print(f"Adding missing entries: {str(self.next_index[node])}, {str(len(self.log))}", "warning")
-        #     request = AppendEntriesRequest(
-        #         term=self.current_term,
-        #         entries=self.log[self.next_index[node]],
-        #         prev_log_index=self.next_index[node] - 1,
-        #         prev_log_term=self.log[self.next_index[node] - 1].term,
-        #         leader_commit_index=self.commit_index
-        #     )
-        #     asyncio.create_task(self.connector.send_message(node, request))
         if reply.success:
-            colorful_print("append request successful", "append")
             self.next_index[node] = min(self.next_index[node] + 1, len(self.log))
             self.match_index[node] = min(self.match_index[node] + 1, len(self.log) - 1)
-            colorful_print(f"next: {str(self.next_index[node])}, match: {str(self.match_index[node])}", "append")
+            if not reply.request_empty:
+                colorful_print(f"Append request to {str(node)} successful", "append")
+                # colorful_print(f"next: {str(self.next_index[node])}, match: {str(self.match_index[node])}", "append")
             return
         else:
-            colorful_print("appended unsuccessfully", "error")
+            colorful_print(f"Append request to {str(node)} unsuccessful", "error")
             if reply.term > self.current_term:
                 colorful_print("reply term", "error")
                 self.update_term(reply.term)
@@ -275,14 +271,7 @@ class Raft:
             self.match_index[node] = 0
             self.next_index[node] -= 1
 
-            request = AppendEntriesRequest(
-                term=self.current_term,
-                entries=None,
-                prev_log_index=self.next_index[node] - 1,
-                prev_log_term=self.log[self.next_index[node] - 1].term,
-                leader_commit_index=self.commit_index
-            )
-            asyncio.create_task(self.connector.send_message(node, request))
+            await self.send_append_entries_request()
 
     # =================================================================================================================
 
@@ -300,4 +289,15 @@ class Raft:
 
         # append entry to local log
         colorful_print("Received from " + str(node) + " : " + str(request.data), "append")
-        await self.send_append_entries_request(request.data)
+
+        new_entry = LogEntry(self.current_term, request.data, len(self.log))
+        self.log.append(new_entry)
+
+        await self.send_append_entries_request()
+
+    # =================================================================================================================
+
+    def print_log(self):
+        print("LOG:")
+        for i in range(1, len(self.log)):
+            print(f"-- {i} {str(self.log[i])}")
